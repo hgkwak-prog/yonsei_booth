@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>부스 선택 + 리뷰 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper/swiper-bundle.min.css" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #0b0b0b; overscroll-behavior: none; }
+  body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; color: #f4f2ee; }
+
+  .screen { position: fixed; inset: 0; display: none; }
+  .screen.active { display: block; }
+
+  /* ================= 선택 화면 ================= */
+  #selectStage { height: 100%; display: flex; flex-direction: column; }
+
+  .top-header { padding: 8px 20px 4px; text-align: center; }
+  .top-header .group-name { font-size: 15px; font-weight: 800; margin-bottom: 2px; }
+  .top-header .group-sub { font-size: 10px; color: #8a8578; }
+  .page-dots { display: flex; justify-content: center; gap: 5px; padding: 6px 0 0; }
+  .page-dots span { width: 5px; height: 5px; border-radius: 50%; background: rgba(244,242,238,0.25); }
+  .page-dots span.active { background: #f4f2ee; width: 14px; border-radius: 3px; }
+
+  .coverflow-area {
+    flex: 1;
+    display: flex; flex-direction: column;
+    min-height: 0; /* flex 자식이 내용 크기 때문에 넘치지 않고 꽉 차게 줄어들 수 있도록 */
+    position: relative;
+    /* touch-action은 Swiper 자체가 내부적으로 관리하도록 비워둠 (강제 지정하면 cards 효과 드래그와 충돌) */
+  }
+
+  .group-nav {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 10px; z-index: 15;
+  }
+  .group-nav button {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid rgba(244,242,238,0.2); background: rgba(244,242,238,0.08);
+    color: #f4f2ee; font-size: 15px; cursor: pointer;
+  }
+
+  /* 크기는 CSS(flex+aspect-ratio 조합)에 맡기지 않고 JS에서 실측 픽셀로 직접 넣는다.
+     (flex-basis %와 aspect-ratio를 같이 쓰면 브라우저가 순환 계산에 빠져서
+      Swiper가 말도 안 되는 크기를 읽어가는 문제가 있었음) */
+  #boothSwiper {
+    position: relative;
+    flex-shrink: 0;
+  }
+  .cover-slide {
+    width: 100%;
+    height: 100%;
+    /* position은 지정하지 않음 -> Swiper의 cards 효과가 필요로 하는 값(absolute)을
+       그대로 쓰게 둔다. 예전엔 여기서 position:relative를 강제해서 cards 효과의
+       내부 stacking 로직과 충돌, 빠른 색 깜빡임의 원인이 됐었음. */
+  }
+  /* 실제 카드 비주얼(썸네일/테두리/밴드/라벨)은 별도 내부 wrapper에 담아서,
+     바깥 .cover-slide(=swiper-slide)의 position은 Swiper가 자유롭게 쓰도록 분리 */
+  .card-inner {
+    position: relative;
+    width: 100%; height: 100%;
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    background: #222; /* 썸네일/톤 로드 전 기본 배경 */
+  }
+  .card-inner .thumb-bg {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+  }
+  /* 테두리: 리뷰 종합 색 (아래 aggregate 색이 실시간으로 채워짐) */
+  .card-inner .border-ring {
+    position: absolute; inset: 0;
+    border-radius: 14px;
+    padding: 3px;
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    z-index: 3;
+    pointer-events: none;
+  }
+  /* 하단 밴드: 부스 고유 기본 톤 (리뷰와 무관, 고정) */
+  .card-inner .base-band {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 30%;
+    opacity: 0.65;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 40%);
+    mask-image: linear-gradient(to bottom, transparent, black 40%);
+    z-index: 1;
+  }
+  .card-inner .label {
+    position: absolute; bottom: 7px; left: 0; right: 0; text-align: center;
+    font-size: 11px; font-weight: 800; text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+    z-index: 4;
+  }
+  .review-count-badge {
+    position: absolute; top: 6px; right: 7px; z-index: 4;
+    background: rgba(0,0,0,0.5); border-radius: 6px;
+    font-size: 9px; font-weight: 700; padding: 2px 6px;
+  }
+
+  .selected-panel { text-align: center; padding-top: 6px; }
+  .selected-panel .num { font-size: 11px; color: #8a8578; margin-bottom: 2px; }
+  .selected-panel .name { font-size: 15px; font-weight: 800; }
+  .swipe-hint { text-align: center; font-size: 11px; color: #6b6659; padding-top: 8px; }
+
+  /* ---- 하단 고정 바 (부스 번호 바로가기 + 리뷰 남기기) ---- */
+  .bottom-bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(11,11,11,0.97), rgba(11,11,11,0.85) 70%, transparent);
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 20;
+  }
+  .jump-row { display: flex; gap: 8px; }
+  .jump-row input {
+    flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid rgba(244,242,238,0.18); background: rgba(244,242,238,0.06);
+    color: #f4f2ee; font-size: 14px; text-align: center;
+  }
+  .jump-row input::placeholder { color: #8a8578; }
+  .jump-row button {
+    padding: 10px 16px; border-radius: 10px; border: 1px solid rgba(244,242,238,0.18);
+    background: rgba(244,242,238,0.08); color: #f4f2ee; font-size: 13px; cursor: pointer;
+  }
+  .review-cta {
+    width: 100%; padding: 14px; border-radius: 12px; border: none;
+    background: #f4f2ee; color: #1c1c1c; font-size: 14px; font-weight: 800; cursor: pointer;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cover-slide { transition: none; }
+  }
+
+  /* ================= 리뷰 화면 ================= */
+  #reviewScreen { overflow-y: auto; }
+  .review-wrap { max-width: 480px; margin: 0 auto; padding: 18px 16px 40px; }
+
+  .rv-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .back-btn {
+    background: rgba(244,242,238,0.08); border: 1px solid rgba(244,242,238,0.15);
+    color: #f4f2ee; border-radius: 10px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  .rv-title { font-size: 18px; font-weight: 800; text-align: right; }
+  .rv-sub { font-size: 12px; color: #8a8578; text-align: right; }
+
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(244,242,238,0.08); border: 1px solid rgba(244,242,238,0.15);
+    border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer; margin-bottom: 14px;
+  }
+  .mode-badge.staff { background: #ffd23f; color: #1c1c1c; border-color: #ffd23f; font-weight: 700; }
+  .mode-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: #8a8578; }
+  .mode-badge.staff .dot { background: #1c1c1c; }
+
+  /* ---- 개인 결과물 정보 카드 ---- */
+  .project-card {
+    display: flex; gap: 14px; align-items: flex-start;
+    background: rgba(244,242,238,0.06); border: 1px solid rgba(244,242,238,0.1);
+    border-radius: 16px; padding: 16px; margin-bottom: 14px;
+  }
+  .project-card .thumb {
+    width: 64px; height: 64px; border-radius: 12px; flex-shrink: 0;
+    background-size: cover; background-position: center;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 800; color: rgba(0,0,0,0.35);
+  }
+  .project-card .info { min-width: 0; flex: 1; }
+  .project-card .title { font-size: 15px; font-weight: 800; margin-bottom: 2px; }
+  .project-card .team { font-size: 11px; color: #8a8578; margin-bottom: 6px; }
+  .project-card .desc { font-size: 12.5px; line-height: 1.5; color: #d8d5cd; }
+  .project-card .desc.empty { color: #6b6659; font-style: italic; }
+  .project-card .link {
+    display: inline-block; margin-top: 8px; font-size: 12px; font-weight: 700;
+    color: #1c1c1c; background: #f4f2ee; border-radius: 8px; padding: 6px 12px; text-decoration: none;
+  }
+
+  .booth-mosaic {
+    display: flex; align-items: center; gap: 14px;
+    border-radius: 16px; overflow: hidden; margin-bottom: 16px; min-height: 70px;
+    background: #1e1e1e; padding: 14px;
+  }
+  .agg-swatch { width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0; box-shadow: inset 0 0 12px rgba(255,255,255,0.15); }
+  .agg-hex { font-family: 'SF Mono', 'Roboto Mono', monospace; font-size: 14px; font-weight: 700; }
+  .agg-sub { font-size: 11px; color: #8a8578; margin-top: 2px; }
+  .empty-note { text-align: center; color: #8a8578; font-size: 13px; width: 100%; padding: 10px 0; }
+
+  .card {
+    background: rgba(244,242,238,0.06); border: 1px solid rgba(244,242,238,0.1);
+    border-radius: 16px; padding: 20px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 13px; margin: 0 0 16px; color: #8a8578; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+
+  .rating-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .rating-row .rl { font-size: 13px; }
+  .stars { display: flex; gap: 5px; }
+  .star {
+    width: 32px; height: 32px; border-radius: 8px;
+    border: 1px solid rgba(244,242,238,0.18); background: transparent; color: #8a8578;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .star.active { background: #f4f2ee; color: #1c1c1c; border-color: #f4f2ee; }
+
+  textarea {
+    width: 100%; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid rgba(244,242,238,0.18); background: rgba(244,242,238,0.04);
+    color: #f4f2ee; font-size: 14px; font-family: inherit; resize: none; min-height: 64px;
+  }
+  textarea::placeholder { color: #8a8578; }
+
+  .submit-btn {
+    width: 100%; padding: 14px; border-radius: 12px; border: none;
+    background: #f4f2ee; color: #1c1c1c; font-size: 14px; font-weight: 800; cursor: pointer; margin-top: 14px;
+  }
+  .submit-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .review-list { display: flex; flex-direction: column; gap: 10px; }
+  .review-item { display: flex; gap: 10px; align-items: flex-start; }
+  .review-dot { width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; }
+  .review-body { font-size: 13px; line-height: 1.5; }
+  .review-meta { font-size: 11px; color: #8a8578; margin-top: 2px; }
+  .review-empty { color: #8a8578; font-size: 13px; text-align: center; padding: 10px 0; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px;
+  }
+  .modal { background: #1e1e1e; border: 1px solid rgba(244,242,238,0.15); border-radius: 18px; padding: 24px; width: 100%; max-width: 320px; }
+  .modal h3 { margin: 0 0 8px; font-size: 16px; }
+  .modal p { margin: 0 0 16px; font-size: 12px; color: #8a8578; line-height: 1.5; }
+  .modal input {
+    width: 100%; padding: 12px 14px; border-radius: 10px; text-align: center;
+    letter-spacing: 0.3em; font-size: 18px;
+    border: 1px solid rgba(244,242,238,0.18); background: rgba(244,242,238,0.05); color: #f4f2ee;
+    margin-bottom: 12px;
+  }
+  .modal-actions { display: flex; gap: 8px; }
+  .modal-actions button { flex: 1; padding: 12px; border-radius: 10px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .modal-actions .confirm { background: #f4f2ee; color: #1c1c1c; }
+  .modal-actions .cancel { background: rgba(244,242,238,0.1); color: #f4f2ee; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: #f4f2ee; color: #1c1c1c; padding: 10px 18px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none;
+    transition: opacity 0.25s ease; z-index: 200;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- ================= 화면 1: 부스 선택 ================= -->
+<div class="screen active" id="selectScreen">
+  <div id="selectStage">
+    <div class="top-header">
+      <div class="group-name" id="groupName">그룹 1</div>
+      <div class="group-sub" id="groupSub">#1 ~ #6 · 임시 분류</div>
+      <div class="page-dots" id="pageDots"></div>
+    </div>
+
+    <div class="coverflow-area" id="coverflowArea">
+      <div class="group-nav">
+        <button id="prevGroupBtn">▲</button>
+        <button id="nextGroupBtn">▼</button>
+      </div>
+
+      <div id="boothSwiper" class="swiper">
+        <div class="swiper-wrapper" id="boothWrapper"></div>
+      </div>
+
+      <div class="selected-panel">
+        <div class="num" id="selNum">#1</div>
+        <div class="name" id="selName">부스 1</div>
+      </div>
+      <div class="swipe-hint">← → 좌우로 탐색 · ↕ 위아래로 그룹 전환</div>
+    </div>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="jump-row">
+      <input type="text" id="jumpInput" placeholder="부스 번호로 바로가기 (1~60)" inputmode="numeric" />
+      <button id="jumpBtn">이동</button>
+    </div>
+    <button class="review-cta" id="goReviewBtn">부스 #1 리뷰 남기기</button>
+  </div>
+</div>
+
+<!-- ================= 화면 2: 리뷰 작성 ================= -->
+<div class="screen" id="reviewScreen">
+  <div class="review-wrap">
+    <div class="rv-header">
+      <button class="back-btn" id="backBtn">← 선택으로</button>
+      <div>
+        <div class="rv-title" id="rvTitle">부스 #1</div>
+        <div class="rv-sub" id="rvSub">0개의 리뷰</div>
+      </div>
+    </div>
+
+    <div class="mode-badge" id="modeBadge"></div>
+
+    <!-- 개인 결과물 정보 카드 (제목/팀명/설명/썸네일/링크 - 다 선택값, 뭐가 있든 없든 대응) -->
+    <div class="project-card" id="projectCard"></div>
+
+    <div class="booth-mosaic" id="boothMosaic"></div>
+
+    <div class="card">
+      <h2>리뷰 남기기</h2>
+      <div id="ratingRows"></div>
+      <textarea id="commentInput" placeholder="소감을 남겨주세요 (선택)"></textarea>
+      <button class="submit-btn" id="submitBtn" disabled>이 색으로 리뷰 남기기</button>
+    </div>
+
+    <div class="card">
+      <h2>남겨진 리뷰</h2>
+      <div class="review-list" id="reviewList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/swiper/swiper-bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+/* ================================================================
+ * 공통 설정
+ * ================================================================ */
+const GROUP_SIZE = 6;
+const GROUP_COUNT = 10;
+const TOTAL = GROUP_SIZE * GROUP_COUNT;
+const HUES = [355, 25, 45, 130, 165, 200, 230, 265, 300, 320];
+
+function el(tag, className) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  return e;
+}
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+/* ================================================================
+ * 평가 속성 설정 (3~6개 사이에서 나중에 확정 예정 -> 이 배열만 바꾸면 전체 반영됨)
+ * ================================================================ */
+const ATTRIBUTE_KEYS = ['rating_1', 'rating_2', 'rating_3'];
+
+/* ================================================================
+ * 색 계산 로직 v3 (aggregate-color-logic.js 이식)
+ * - 테두리 색: 부스에 달린 "모든 리뷰의 평균"을 속성 개수에 상관없이
+ *   벡터로 합산해서 계산 (특정 속성에 쏠리면 그 방향 색이 강해짐)
+ * - 하단 밴드(기본 톤): 부스 타입에 따라 랜덤 고정 또는 썸네일 색 추출
+ * ================================================================ */
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0]; else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x]; else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c]; else [r, g, b] = [c, 0, x];
+  const toHex = v => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase();
+}
+
+// 리뷰 전체(reviews: [{ratings:{...}}, ...])를 하나의 색으로 압축 (테두리용)
+function aggregateColor(reviews, attributeKeys) {
+  const n = attributeKeys.length;
+  if (reviews.length === 0 || n === 0) {
+    return { hue: 0, saturation: 0, lightness: 50, hex: hslToHex(0, 0, 50), magnitude: 0 };
+  }
+  const averages = attributeKeys.map((key) => {
+    const sum = reviews.reduce((acc, r) => acc + (r.ratings[key] || 3), 0);
+    return sum / reviews.length;
+  });
+  let vx = 0, vy = 0;
+  averages.forEach((avg, i) => {
+    const angleRad = ((360 / n) * i * Math.PI) / 180;
+    const force = (avg - 3) / 2; // 1~5 -> -1~1 (3점=중립)
+    vx += force * Math.cos(angleRad);
+    vy += force * Math.sin(angleRad);
+  });
+  let hue = Math.atan2(vy, vx) * (180 / Math.PI);
+  if (hue < 0) hue += 360;
+  const maxPossibleMagnitude = n / 2;
+  const magnitude = Math.min(1, Math.sqrt(vx * vx + vy * vy) / maxPossibleMagnitude);
+  const saturation = Math.round(20 + magnitude * 70);
+  const overallAvg = averages.reduce((a, b) => a + b, 0) / n;
+  const lightness = Math.round(clamp(30 + ((overallAvg - 1) / 4) * 40, 25, 75));
+  return { hue: Math.round(hue), saturation, lightness, hex: hslToHex(Math.round(hue), saturation, lightness), magnitude };
+}
+
+// 부스 번호 기반 고정(새로고침해도 안 바뀌는) 랜덤 톤 -- 논문 부스, 또는 썸네일이 아직 없는 부스용
+function hashToneFor(n) {
+  const HUES = [355, 25, 45, 130, 165, 200, 230, 265, 300, 320];
+  const i = n - 1;
+  const hue = (HUES[i % HUES.length] + i * 7) % 360;
+  return hslToHex(hue, 55, 45);
+}
+
+// 이미지에서 대표색을 뽑아옴. CORS 등으로 실패하면 null 반환 (호출부에서 hashToneFor로 대체)
+function extractDominantColor(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const size = 24;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+        let r = 0, g = 0, b = 0, count = 0;
+        for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; count++; }
+        r = Math.round(r / count); g = Math.round(g / count); b = Math.round(b / count);
+        resolve('#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase());
+      } catch (e) { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+const baseToneCache = {};        // { boothNumber: hex } -- 이미지 색 추출은 비용이 있어 한 번 계산 후 캐싱
+const bandElementsByNumber = {};  // { boothNumber: <band DOM element> } -- 색 추출 끝나면 다시 그리지 않고 바로 갱신
+
+// 부스의 하단 밴드용 기본 톤을 동기적으로 반환 (즉시 렌더링 위해).
+// 논문 타입/썸네일 없음 -> 바로 확정. 그 외(콘텐츠/비즈니스) -> 일단 임시 톤을 보여주고,
+// 백그라운드에서 실제 썸네일 색을 추출해 끝나면 해당 밴드 DOM만 조용히 갱신한다.
+function getBaseToneSync(n) {
+  if (baseToneCache[n]) return baseToneCache[n];
+  const info = boothInfoByNumber[n] || {};
+  const fallback = hashToneFor(n);
+
+  if (info.booth_type === 'paper' || !info.thumbnail_url) {
+    baseToneCache[n] = fallback;
+    return fallback;
+  }
+
+  extractDominantColor(info.thumbnail_url).then((hex) => {
+    const finalHex = hex || fallback;
+    baseToneCache[n] = finalHex;
+    const bandEl = bandElementsByNumber[n];
+    if (bandEl) bandEl.style.background = finalHex;
+  });
+
+  return fallback;
+}
+
+/* ================================================================
+ * 데이터 저장/로드 (Supabase 연동)
+ * ================================================================ */
+const SUPABASE_URL = 'https://ojpqpwnxrjydixdhlxsg.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qcHFwd254cmp5ZGl4ZGhseHNnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MDk4MDksImV4cCI6MjEwMzA4NTgwOX0.ibdVbDTvJUb-tkEfVQLx5M5J9UhDdgvBct0euKjhGy8';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let boothIdByNumber = {};   // { 1: <uuid/bigint id in DB>, 2: ..., ... }
+let boothInfoByNumber = {}; // { 1: { title, team_name, description, thumbnail_url, external_link }, ... }
+let reviewsByBooth = {};    // { 1: [review, review, ...], ... } (기존 db 변수를 대체)
+let sessionReviewerType = 'anon';
+let sessionPinValue = null;
+
+// booths + reviews 테이블을 한 번에 불러와서 메모리에 캐싱 (매 렌더링마다 다시 요청하지 않도록)
+async function loadAllData() {
+  const { data: booths, error: boothErr } = await sb
+    .from('booths')
+    .select('id, number, title, team_name, description, thumbnail_url, external_link, booth_type');
+  if (boothErr) { console.error('부스 목록 로드 실패', boothErr); return; }
+
+  const idToNumber = {};
+  boothIdByNumber = {};
+  boothInfoByNumber = {};
+  booths.forEach((b) => {
+    boothIdByNumber[b.number] = b.id;
+    idToNumber[b.id] = b.number;
+    boothInfoByNumber[b.number] = {
+      title: b.title, team_name: b.team_name, description: b.description,
+      thumbnail_url: b.thumbnail_url, external_link: b.external_link,
+      booth_type: b.booth_type,
+    };
+  });
+
+  const { data: reviews, error: reviewErr } = await sb
+    .from('reviews')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if (reviewErr) { console.error('리뷰 로드 실패', reviewErr); return; }
+
+  reviewsByBooth = {};
+  reviews.forEach((r) => {
+    const n = idToNumber[r.booth_id];
+    if (!n) return;
+    if (!reviewsByBooth[n]) reviewsByBooth[n] = [];
+    reviewsByBooth[n].push({
+      ratings: r.ratings || {},
+      comment: r.comment,
+      reviewer_type: r.reviewer_type, ts: new Date(r.created_at).getTime(),
+    });
+  });
+}
+
+function getReviews(n) { return reviewsByBooth[n] || []; }
+
+// 리뷰 하나를 Supabase에 저장하고, 성공하면 로컬 캐시(reviewsByBooth)에도 반영
+async function submitReviewToSupabase(n, review) {
+  const boothId = boothIdByNumber[n];
+  if (!boothId) throw new Error(`부스 #${n}의 booth_id를 찾을 수 없어요`);
+
+  const { data, error } = await sb.from('reviews').insert({
+    booth_id: boothId,
+    ratings: review.ratings,
+    comment: review.comment,
+    pin_input: review.pin_input,
+    reviewer_type: review.reviewer_type,
+  }).select().single();
+
+  if (error) throw error;
+
+  if (!reviewsByBooth[n]) reviewsByBooth[n] = [];
+  reviewsByBooth[n].push({
+    ratings: data.ratings || {},
+    comment: data.comment,
+    reviewer_type: data.reviewer_type, ts: new Date(data.created_at).getTime(),
+  });
+}
+
+// 관계자 모드는 이제 Claude 아티팩트가 아니라 실제 배포 환경이라, 브라우저 localStorage로 유지
+// (기기/브라우저별로 로그인 상태가 남는, 일반적인 웹사이트와 같은 방식)
+const SESSION_KEY = 'reviewerSession:v1';
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      sessionReviewerType = parsed.reviewerType || 'anon';
+      sessionPinValue = parsed.pin || null;
+    }
+  } catch (e) { /* localStorage 접근 불가 환경이면 그냥 anon 유지 */ }
+}
+function saveSession() {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ reviewerType: sessionReviewerType, pin: sessionPinValue }));
+  } catch (e) {}
+}
+function clearSession() {
+  sessionReviewerType = 'anon'; sessionPinValue = null;
+  try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+}
+function checkPin(pin) { return /^\d{4}$/.test(pin); }
+
+/* ================================================================
+ * 토스트
+ * ================================================================ */
+const toastEl = document.getElementById('toast');
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+/* ================================================================
+ * 화면 1: 부스 선택 (Swiper 하나로 60개 부스 전체 커버플로우)
+ * ================================================================ */
+const boothWrapper = document.getElementById('boothWrapper');
+const GROUP_NAMES = [];
+for (let g = 0; g < GROUP_COUNT; g++) GROUP_NAMES.push(`그룹 ${g + 1}`);
+
+// 베이스 톤(밴드, 고정) + 리뷰 종합 색(테두리, 리뷰 쌓일 때마다 변함)을 조합해 카드를 만든다.
+function buildBoothSlide(n) {
+  const reviews = getReviews(n);
+  const info = boothInfoByNumber[n] || {};
+  const baseTone = getBaseToneSync(n);
+  const agg = reviews.length > 0 ? aggregateColor(reviews, ATTRIBUTE_KEYS) : null;
+
+  const slide = el('div', 'swiper-slide cover-slide');
+  const inner = el('div', 'card-inner'); // 실제 비주얼은 여기 담고, slide 자체 position은 Swiper에게 맡김
+  slide.appendChild(inner);
+
+  if (info.thumbnail_url) {
+    const thumbBg = el('div', 'thumb-bg');
+    thumbBg.style.backgroundImage = `url('${info.thumbnail_url.replace(/'/g, "\\'")}')`;
+    inner.appendChild(thumbBg);
+  } else {
+    // 썸네일이 아직 없을 땐, 카드 전체를 baseTone으로 채우면 아래 밴드(마찬가지로
+    // baseTone)랑 완전히 같은 색이라 안 보이게 됨 -> 중립 플레이스홀더로 분리
+    inner.style.background = '#242424';
+  }
+
+  const band = el('div', 'base-band');
+  band.style.background = baseTone;
+  bandElementsByNumber[n] = band;
+  inner.appendChild(band);
+
+  const ring = el('div', 'border-ring');
+  ring.style.background = agg ? agg.hex : 'rgba(244,242,238,0.18)'; // 리뷰 없으면 은은한 무채색 테두리
+  inner.appendChild(ring);
+
+  const label = el('div', 'label'); label.textContent = `#${n}`;
+  inner.appendChild(label);
+
+  if (reviews.length > 0) {
+    const badge = el('div', 'review-count-badge');
+    badge.textContent = reviews.length;
+    inner.appendChild(badge);
+  }
+  return slide;
+}
+
+function buildAllBoothSlides() {
+  boothWrapper.innerHTML = '';
+  Object.keys(bandElementsByNumber).forEach(k => delete bandElementsByNumber[k]);
+  for (let n = 1; n <= TOTAL; n++) boothWrapper.appendChild(buildBoothSlide(n));
+}
+
+buildAllBoothSlides();
+
+// 그룹 인디케이터 점
+const pageDots = document.getElementById('pageDots');
+for (let g = 0; g < GROUP_COUNT; g++) pageDots.appendChild(el('span', g === 0 ? 'active' : ''));
+
+const goReviewBtn = document.getElementById('goReviewBtn');
+const groupNameEl = document.getElementById('groupName');
+const groupSubEl = document.getElementById('groupSub');
+const selNumEl = document.getElementById('selNum');
+const selNameEl = document.getElementById('selName');
+
+function boothNumOf(index) { return index + 1; }
+function groupOfIndex(index) { return Math.floor(index / GROUP_SIZE); }
+
+function updateSelectionUI(swiper) {
+  const boothNum = boothNumOf(swiper.realIndex);
+  const g = groupOfIndex(swiper.realIndex);
+  const groupStart = g * GROUP_SIZE + 1;
+  const groupEnd = Math.min(TOTAL, groupStart + GROUP_SIZE - 1);
+
+  selNumEl.textContent = `#${boothNum}`;
+  selNameEl.textContent = `부스 ${boothNum}`;
+  goReviewBtn.textContent = `부스 #${boothNum} 리뷰 남기기`;
+  groupNameEl.textContent = GROUP_NAMES[g];
+  groupSubEl.textContent = `#${groupStart} ~ #${groupEnd} · 임시 분류`;
+
+  [...pageDots.children].forEach((dot, idx) => dot.classList.toggle('active', idx === g));
+}
+
+// #boothSwiper 크기를 CSS가 아니라 JS로 실측 계산해서 픽셀로 직접 넣는다.
+// (헤더/푸터 제외 영역의 70% 높이, A4 비율(1:1.414)로 폭 계산)
+const boothSwiperEl = document.getElementById('boothSwiper');
+let boothSwiper; // 먼저 선언만 해두어서, 아래 sizeBoothSwiper()가 이 시점에 호출돼도
+                 // TDZ(Temporal Dead Zone) 에러 없이 안전하게 undefined로 읽히도록 함
+
+function sizeBoothSwiper() {
+  const areaHeight = document.getElementById('coverflowArea').clientHeight;
+  if (areaHeight <= 0) return; // 아직 레이아웃 전이면 스킵 (다음 호출에서 다시 시도)
+  const cardHeight = Math.round(areaHeight * 0.7);
+  const cardWidth = Math.round(cardHeight / 1.414);
+  boothSwiperEl.style.height = cardHeight + 'px';
+  boothSwiperEl.style.width = cardWidth + 'px';
+  if (boothSwiper && boothSwiper.update) {
+    boothSwiper.update();
+  }
+}
+
+const SWIPER_CONFIG = {
+  effect: 'cards',
+  grabCursor: true,
+  speed: 400, // 전환 속도를 명시적으로 지정 (너무 빠르게 느껴지는 것 방지)
+  cardsEffect: { slideShadows: false, perSlideOffset: 8, perSlideRotate: 3 },
+  on: {
+    slideChange(s) { updateSelectionUI(s); },
+    init(s) { updateSelectionUI(s); },
+  },
+};
+
+sizeBoothSwiper(); // Swiper 만들기 전에 먼저 실제 픽셀 크기를 확정
+boothSwiper = new Swiper('#boothSwiper', SWIPER_CONFIG);
+window.addEventListener('resize', sizeBoothSwiper);
+
+function currentBoothNum() { return boothNumOf(boothSwiper.realIndex); }
+
+// 리뷰 데이터가 바뀐 뒤(리뷰 제출, 화면 복귀 등) 메인 커버플로우 색을 다시 그림.
+function refreshBoothSlides() {
+  const keepIndex = boothSwiper.realIndex;
+  boothSwiper.destroy(true, true);
+  buildAllBoothSlides();
+  sizeBoothSwiper();
+  boothSwiper = new Swiper('#boothSwiper', SWIPER_CONFIG);
+  boothSwiper.slideTo(keepIndex, 0);
+}
+
+/* ---- 위아래 스와이프로 그룹(6개) 단위 이동 ---- */
+const coverflowArea = document.getElementById('coverflowArea');
+let touchStartY = null, touchStartX = null;
+
+coverflowArea.addEventListener('touchstart', (e) => {
+  touchStartY = e.touches[0].clientY;
+  touchStartX = e.touches[0].clientX;
+}, { passive: true });
+
+coverflowArea.addEventListener('touchend', (e) => {
+  if (touchStartY === null) return;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  if (Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx)) {
+    if (dy < 0) jumpGroup(1); else jumpGroup(-1);
+  }
+  touchStartY = null; touchStartX = null;
+}, { passive: true });
+
+function jumpGroup(delta) {
+  const currentGroup = groupOfIndex(boothSwiper.realIndex);
+  const targetGroup = clamp(currentGroup + delta, 0, GROUP_COUNT - 1); // loop 없앤 만큼, 그룹은 양 끝에서 멈춤
+  const targetIndex = targetGroup * GROUP_SIZE;
+  boothSwiper.slideTo(targetIndex);
+}
+
+document.getElementById('prevGroupBtn').onclick = () => jumpGroup(-1);
+document.getElementById('nextGroupBtn').onclick = () => jumpGroup(1);
+
+/* ---- 부스 번호로 바로가기 ---- */
+document.getElementById('jumpBtn').onclick = jumpToInput;
+document.getElementById('jumpInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') jumpToInput(); });
+
+function jumpToInput() {
+  const input = document.getElementById('jumpInput');
+  const n = parseInt(input.value, 10);
+  if (!n || n < 1 || n > TOTAL) {
+    showToast(`1~${TOTAL} 사이 번호를 입력해주세요`);
+    return;
+  }
+  boothSwiper.slideTo(n - 1);
+  input.value = '';
+}
+
+/* ---- 리뷰 화면으로 이동 ---- */
+goReviewBtn.onclick = () => openReview(currentBoothNum());
+
+/* ================================================================
+ * 화면 2: 리뷰 작성
+ * ================================================================ */
+const selectScreen = document.getElementById('selectScreen');
+const reviewScreen = document.getElementById('reviewScreen');
+
+function openReview(boothNum) {
+  selectScreen.classList.remove('active');
+  reviewScreen.classList.add('active');
+  renderReview(boothNum);
+}
+document.getElementById('backBtn').onclick = () => {
+  reviewScreen.classList.remove('active');
+  selectScreen.classList.add('active');
+  refreshBoothSlides(); // 방금 남긴 리뷰가 있으면 메인 커버플로우 색에 즉시 반영
+};
+
+function modeBadgeHTML() {
+  const isStaff = sessionReviewerType === 'staff';
+  return `<span class="dot"></span>${isStaff ? '관계자로 참여 중' : '방문객으로 참여 중'}`;
+}
+
+// title/team_name/description/thumbnail_url/external_link 중 뭐가 채워져 있든,
+// 비어있는 값은 자연스럽게 생략하고 있는 것만 보여줌
+function renderProjectCard(n) {
+  const info = boothInfoByNumber[n] || {};
+  const card = document.getElementById('projectCard');
+
+  const thumbStyle = info.thumbnail_url
+    ? `background-image:url('${info.thumbnail_url.replace(/'/g, "\\'")}')`
+    : '';
+  const thumbFallback = !info.thumbnail_url ? `#${n}` : '';
+
+  const title = info.title || `부스 #${n}`;
+  const team = info.team_name ? `<div class="team">${escapeHTML(info.team_name)}</div>` : '';
+  const desc = info.description
+    ? `<div class="desc">${escapeHTML(info.description)}</div>`
+    : `<div class="desc empty">아직 프로젝트 소개가 등록되지 않았어요.</div>`;
+  const link = info.external_link
+    ? `<a class="link" href="${info.external_link}" target="_blank" rel="noopener">자세히 보기 →</a>`
+    : '';
+
+  card.innerHTML = `
+    <div class="thumb" style="${thumbStyle}">${thumbFallback}</div>
+    <div class="info">
+      <div class="title">${escapeHTML(title)}</div>
+      ${team}
+      ${desc}
+      ${link}
+    </div>
+  `;
+}
+
+function renderReview(n) {
+  const reviews = getReviews(n);
+  document.getElementById('rvTitle').textContent = `부스 #${n}`;
+  document.getElementById('rvSub').textContent = `${reviews.length}개의 리뷰`;
+
+  renderProjectCard(n);
+
+  const badge = document.getElementById('modeBadge');
+  badge.className = 'mode-badge' + (sessionReviewerType === 'staff' ? ' staff' : '');
+  badge.innerHTML = modeBadgeHTML();
+  badge.onclick = openModeModal;
+
+  const mosaic = document.getElementById('boothMosaic');
+  if (reviews.length === 0) {
+    mosaic.innerHTML = `<div class="empty-note">아직 리뷰가 없어요. 첫 번째 색을 남겨보세요.</div>`;
+  } else {
+    const agg = aggregateColor(reviews, ATTRIBUTE_KEYS);
+    mosaic.innerHTML = `
+      <div class="agg-swatch" style="background:${agg.hex}"></div>
+      <div class="agg-info">
+        <div class="agg-hex">${agg.hex}</div>
+        <div class="agg-sub">리뷰 ${reviews.length}개 종합 · 의견 쏠림 ${Math.round(agg.magnitude * 100)}%</div>
+      </div>`;
+  }
+
+  const listEl = document.getElementById('reviewList');
+  listEl.innerHTML = reviews.length === 0
+    ? `<div class="review-empty">리뷰가 아직 없습니다.</div>`
+    : [...reviews].reverse().slice(0, 20).map(r => {
+        const scoreStr = ATTRIBUTE_KEYS.map(k => r.ratings[k] ?? '-').join(' / ');
+        return `
+        <div class="review-item">
+          <div class="review-body">
+            ${r.comment ? escapeHTML(r.comment) : '<span style="color:#8a8578">(소감 없음)</span>'}
+            <div class="review-meta">${scoreStr}점 · ${r.reviewer_type === 'staff' ? '관계자' : '방문객'}</div>
+          </div>
+        </div>`;
+      }).join('');
+
+  const ratings = {};
+  ATTRIBUTE_KEYS.forEach(k => { ratings[k] = 0; });
+  const submitBtn = document.getElementById('submitBtn');
+  submitBtn.disabled = true;
+  submitBtn.textContent = '이 색으로 리뷰 남기기';
+  document.getElementById('commentInput').value = '';
+
+  const ratingRowsEl = document.getElementById('ratingRows');
+  ratingRowsEl.innerHTML = '';
+  ATTRIBUTE_KEYS.forEach(key => {
+    const row = el('div', 'rating-row');
+    const label = el('span', 'rl'); label.textContent = key;
+    const container = el('div', 'stars'); container.dataset.key = key;
+    row.appendChild(label); row.appendChild(container);
+    ratingRowsEl.appendChild(row);
+
+    for (let i = 1; i <= 5; i++) {
+      const btn = el('button', 'star');
+      btn.textContent = i;
+      btn.onclick = () => {
+        ratings[key] = i;
+        [...container.children].forEach((c, idx) => c.classList.toggle('active', idx < i));
+        submitBtn.disabled = !ATTRIBUTE_KEYS.every(k => ratings[k] > 0);
+      };
+      container.appendChild(btn);
+    }
+  });
+
+  submitBtn.onclick = async () => {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '저장 중…';
+    const preview = aggregateColor([{ ratings }], ATTRIBUTE_KEYS); // 이번 리뷰만으로 계산한 미리보기 색 (토스트용)
+    const review = {
+      ratings: { ...ratings },
+      comment: document.getElementById('commentInput').value.trim(),
+      pin_input: sessionPinValue,
+      reviewer_type: sessionReviewerType,
+    };
+    try {
+      await submitReviewToSupabase(n, review);
+      showToast(`반영됐어요 (미리보기 색 ${preview.hex})`);
+      renderReview(n);
+    } catch (e) {
+      console.error('리뷰 저장 실패', e);
+      showToast('저장에 실패했어요. 다시 시도해주세요.');
+      submitBtn.disabled = false;
+      submitBtn.textContent = '이 색으로 리뷰 남기기';
+    }
+  };
+}
+
+function escapeHTML(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function openModeModal() {
+  const isStaff = sessionReviewerType === 'staff';
+  const backdrop = el('div', 'modal-backdrop');
+  backdrop.innerHTML = isStaff ? `
+      <div class="modal">
+        <h3>관계자 모드</h3>
+        <p>현재 관계자로 참여 중입니다. 방문객 모드로 돌아갈까요?</p>
+        <div class="modal-actions">
+          <button class="cancel" id="modalCancel">닫기</button>
+          <button class="confirm" id="modalLogout">방문객으로 전환</button>
+        </div>
+      </div>` : `
+      <div class="modal">
+        <h3>관계자 PIN 입력</h3>
+        <p>PIN을 입력하면 이후 남기는 리뷰가 관계자 리뷰로 표시됩니다. (검증 방식은 추후 확정 예정)</p>
+        <input type="text" id="pinField" maxlength="4" inputmode="numeric" placeholder="••••" />
+        <div class="modal-actions">
+          <button class="cancel" id="modalCancel">취소</button>
+          <button class="confirm" id="modalConfirm">확인</button>
+        </div>
+      </div>`;
+  document.body.appendChild(backdrop);
+  document.getElementById('modalCancel').onclick = () => backdrop.remove();
+  backdrop.onclick = (e) => { if (e.target === backdrop) backdrop.remove(); };
+
+  if (isStaff) {
+    document.getElementById('modalLogout').onclick = async () => {
+      backdrop.remove(); await clearSession();
+      renderReview(parseInt(document.getElementById('rvTitle').textContent.replace('부스 #', ''), 10));
+      showToast('방문객 모드로 전환했어요');
+    };
+  } else {
+    const pinField = document.getElementById('pinField');
+    document.getElementById('modalConfirm').onclick = async () => {
+      const val = pinField.value.trim();
+      if (checkPin(val)) {
+        sessionReviewerType = 'staff'; sessionPinValue = val;
+        await saveSession(); backdrop.remove();
+        renderReview(parseInt(document.getElementById('rvTitle').textContent.replace('부스 #', ''), 10));
+        showToast('관계자 모드로 전환했어요');
+      } else {
+        pinField.style.borderColor = '#e05252';
+        showToast('4자리 숫자를 입력해주세요');
+      }
+    };
+  }
+}
+
+/* ================================================================
+ * 초기 실행
+ * ================================================================ */
+(async function init() {
+  await loadAllData();
+  loadSession();
+  refreshBoothSlides(); // 저장돼있던 리뷰 색을 초기 로드 시점에 반영
+})();
+</script>
+</body>
+</html>
